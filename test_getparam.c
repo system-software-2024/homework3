@@ -15,5 +15,6 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	printf("getparam prio: %u\n", param.sched_priority);
+
 	return 0;
 }

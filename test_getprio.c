@@ -17,5 +17,6 @@ int main(int argc, char *argv[]) {
 	}
 	printf("minprio: %d, maxprio: %d\n", minret, maxret);
 	assert(minret == 1 && maxret == 3);
+
 	return 0;
 }

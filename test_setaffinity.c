@@ -20,5 +20,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     CPU_CLR(cpu_id, &cpuset);
+
     return 0;
 }

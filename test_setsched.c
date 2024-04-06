@@ -18,5 +18,6 @@ int main(int argc, char *argv[]) {
     if (ret != 0) {
         perror("sched_setscheduler");
     }
+
     return 0;
 }

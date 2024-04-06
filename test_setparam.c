@@ -17,5 +17,6 @@ int main(int argc, char *argv[]) {
 		perror("sched_setparam");
 		return 1;
 	}
+	
 	return 0;
 }

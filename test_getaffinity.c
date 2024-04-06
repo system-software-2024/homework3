@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <sched.h>
 #include <unistd.h>
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "usage: ./test_getaffinity pid\n");
@@ -27,5 +28,6 @@ int main(int argc, char *argv[]) {
         }
     }
     printf("getaffinity cpuid: %ld\n", cpu_id);
+    
     return 0;
 }

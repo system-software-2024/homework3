@@ -17,5 +17,6 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	assert(ret == SCHED_MLQ);
+
 	return 0;
 }
