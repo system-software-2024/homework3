@@ -17,6 +17,7 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	assert(ret == SCHED_MLQ);
+	printf("getscheduler: %d\n", ret);
 
 	return 0;
 }
