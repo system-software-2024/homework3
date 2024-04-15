@@ -6,7 +6,7 @@
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "usage: ./test_getaffinity pid\n");
+        fprintf(stderr, "usage: ./getaffinity.bin pid\n");
         return 1;
     }
     long nproc = sysconf(_SC_NPROCESSORS_ONLN);

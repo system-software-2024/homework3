@@ -5,7 +5,7 @@
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "usage: ./test_setaffinity pid cpu_id\n");
+        fprintf(stderr, "usage: ./setaffinity.bin pid cpu_id\n");
         return 1;
     }
     pid_t pid = strtol(argv[1], NULL, 10);

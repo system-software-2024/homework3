@@ -4,7 +4,7 @@
 
 int main(int argc, char *argv[]) {
 	if (argc < 3) {
-		fprintf(stderr, "usage: ./test_setparam pid prio\n");
+		fprintf(stderr, "usage: ./setparam.bin pid prio\n");
 		return 1;
 	}
 	pid_t pid = strtol(argv[1], NULL, 10);
