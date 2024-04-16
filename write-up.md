@@ -6,10 +6,20 @@ CS5374 Homework3
 Kernel Configuration
 ---
 
-We change the preemption model to **Voluntary Kernel Preemption (Desktop)**. This avoids problems related to RCU stalls since **Preemptible Kernel** will also select `CONFIG_PREEMPT_RCU` which will cause problems if real-time tasks do not give up their CPUs.
+We change the preemption model to **Voluntary Kernel Preemption (Desktop)** (CONFIG_PREEMPT_VOLUNTARY). This avoids RCU's CPU stalls warning since **Preemptible Kernel** (CONFIG_PREEMPT) will also enable CONFIG_PREEMPT_RCU which will cause problems if real-time tasks do not give up their CPUs.
+
+For further details, please see <https://www.kernel.org/doc/Documentation/RCU/stallwarn.txt>
+
+We can also observe RCU's CPU stalls warning when using Linux's built-in rt scheduler with RT throttling disabled.
 
 ![img](kconfig.png)
 
+`checkpatch.pl` Warning Related to `printk`
+---
+
+It seems that `checkpatch.pl` always warns if we use `printk`. We used a macro to wrap the `printk` in our implementation to minimize the number of warnings. However, we still need to use `printk` as it is a good tool to trace our scheduler behavior and this is essential to conduct our experiments. We also find that there are many uses of `printk`s in `kernel/sched/core.c`.
+
+The suggestion that  `checkpatch.pl` provides is to use the function (which wraps `printk`) that the subsystem which our code belongs to provided. However, it seems that the scheduler subsystem do not provide their own `printk` equivalent functions.
 
 Implementation Details
 ---
@@ -304,6 +314,8 @@ debugfs /sys/kernel/debug debugfs defaults
 
 * can check the `trace_printk` message in `/sys/kernel/debug/tracing/trace`
 
+However, we think that `printk` is easier to use because it is possible to configure Linux to output the messages in kernel ring buffers to console directly by using `dmesg -n 8`. Therefore, we use `printk` to trace the behavior of our scheduler instead of using `trace_printk`.
+
 Bonus: real-time throttling
 ---
 
@@ -365,6 +377,9 @@ These are experiments to check whether MLQ works correctly. Syscall tests are te
 
 ![image](experiment1.png)
 
+You will see that pid 3094 has no oppotunity to run because pid 3093 is a busy loop and has higher priority.
+Pid 3093 can be run as soon as pid 3092 sleeps, which is what we expect.
+
 ### Experiment-2 - round-robin test
 
 * Run a round-robin (RR) test with 2 tasks, one for each priority 1 and priority 2, respectively.
@@ -386,7 +401,7 @@ These are experiments to check whether MLQ works correctly. Syscall tests are te
 
 * Run a FIFO test with a busy loop, check if it works properly.
 * ![img](experiment3_1.png)
-* The task will execute permanently.
+* The task will keep executing without any requeueing as there is no time slice for tasks with priority 3.
 * ![img](experiment3_2.png)
 
 
