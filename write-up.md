@@ -235,7 +235,7 @@ In this section, we will discuss about how to test the system calls mentioned in
 
 * To achieve the requirement, we modified the definition of these two system calls.
 
-* ![image](sys_priority.png)
+* ![img](imgs/sys_priority.png)
 
   ```c=
   SYSCALL_DEFINE1(sched_get_priority_min, int, policy)
@@ -361,7 +361,7 @@ When MLQ is being throttled, an message `MLQ: Throttling for xxx ns` will be out
 
 When running an infinite loop without any sleeps with MLQ, you will see the message in the kernel ring buffer.
 
-![image](bonus_throttling.png)
+![img](imgs/bonus_throttling.png)
 
 ## Experiments
 
@@ -375,7 +375,7 @@ These are experiments to check whether MLQ works correctly. Syscall tests are te
 * Processes `loop_busy(pid=3093)` and `loop_busy(pid=3094)` with prioritiy 2 and 3, respectively.
 
 
-![image](experiment1.png)
+![img](imgs/experiment1.png)
 
 You will see that pid 3094 has no oppotunity to run because pid 3093 is a busy loop and has higher priority.
 Pid 3093 can be run as soon as pid 3092 sleeps, which is what we expect.
