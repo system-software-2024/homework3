@@ -12,7 +12,7 @@ For further details, please see <https://www.kernel.org/doc/Documentation/RCU/st
 
 We can also observe RCU's CPU stalls warning when using Linux's built-in rt scheduler with RT throttling disabled.
 
-![img](kconfig.png)
+![img](imgs/kconfig.png)
 
 `checkpatch.pl` Warning Related to `printk`
 ---
@@ -221,13 +221,13 @@ In this section, we will discuss about how to test the system calls mentioned in
 
 * sched_setscheduler sets the scheduling policy of specified process to MLQ scheduler, and assign a priority to the process. 
 * sched_getscheduler gets the process's scheduling policy, we expect that the system will return 7 (SCHED_MLQ).
-* ![img](sys_scheduler.png)
+* ![img](imgs/sys_scheduler.png)
 
 ### sched_setparam / sched_getparam
 
 * sched_setparam sets the scheduling priority of specified process, the pre-defined range of priority of MLQ scheduler is between 1 and 3. If the number is not in the range, it will return an error. 
 * sched_getparam gets the scheduling priority of specified process, the priority we got should be the same as what we set.
-* ![img](sys_param.png)
+* ![img](imgs/sys_param.png)
 
 ### sched_getpriority_min / sched_getpriority_max
 
@@ -287,7 +287,7 @@ In this section, we will discuss about how to test the system calls mentioned in
 * sched_getaffinity gets the CPU affinity for specific process by iterating through all available cpuids. It is able to get all online cpuids from `long nproc = sysconf(_SC_NPROCESSORS_ONLN)`, then we can check whether CPU affinity is set by `CPU_ISSET` macro.
 * The critical functions in linux kernel which are directly associated with this system call are`set_cpus_allowed_common` and `select_task_rq_mlq`, which is defined in `kernel/sched/core.c` and `kernel/sched/mlq.c`
 * There are 2 cores in the qemu virtual machine, so we basically set the cpuid to 0 and 1, the `sched_getaffinity` should return the corresponding cpuid.
-* ![img](sys_affinity.png)
+* ![img](imgs/sys_affinity.png)
 
 
 Trace-printk
@@ -400,18 +400,18 @@ Pid 3093 can be run as soon as pid 3092 sleeps, which is what we expect.
 ### Experiment-3 - FIFO (Priority 3) tests
 
 * Run a FIFO test with a busy loop, check if it works properly.
-* ![img](experiment3_1.png)
+* ![img](imgs/experiment3_1.png)
 * The task will keep executing without any requeueing as there is no time slice for tasks with priority 3.
-* ![img](experiment3_2.png)
+* ![img](imgs/experiment3_2.png)
 
 
 ### Experiment-4 - Priority changing tests
 
 * Run two busy loop tasks with priority 1 and priority 2. After a period of time, exchange their priority.
-* ![img](experiment4_1.png)
+* ![img](imgs/experiment4_1.png)
 * Observe the task in queue with priority 1 is changed or not.
-* ![img](experiment4_2.png)
-* ![img](experiment4_3.png)
+* ![img](imgs/experiment4_2.png)
+* ![img](imgs/experiment4_3.png)
 
 ### Experiment-5 - throttling test (bonus)
 
@@ -441,7 +441,7 @@ $ dmesg       # check the kernel message
 
 Result: The system is laggy but not blocked. `dmesg` shows the following message.
 
-![img](experiment5_1.png)
+![img](imgs/experiment5_1.png)
 
 It shows that throttling works.
 
