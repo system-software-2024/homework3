@@ -1,0 +1,656 @@
+diff --git a/include/asm-generic/vmlinux.lds.h b/include/asm-generic/vmlinux.lds.h
+index f2984af2b85b..a22cd249dfaf 100644
+--- a/include/asm-generic/vmlinux.lds.h
++++ b/include/asm-generic/vmlinux.lds.h
+@@ -129,6 +129,7 @@
+ 	__begin_sched_classes = .;		\
+ 	*(__idle_sched_class)			\
+ 	*(__fair_sched_class)			\
++	*(__mlq_sched_class)			\
+ 	*(__rt_sched_class)			\
+ 	*(__dl_sched_class)			\
+ 	*(__stop_sched_class)			\
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index c1a927ddec64..3bd607afb169 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -562,6 +562,12 @@ struct sched_entity {
+ #endif
+ };
+ 
++struct sched_mlq_entity {
++	struct list_head	run_list;
++	s64			time_slice;
++	u64			exec_start;
++};
++
+ struct sched_rt_entity {
+ 	struct list_head		run_list;
+ 	unsigned long			timeout;
+@@ -777,6 +783,7 @@ struct task_struct {
+ 
+ 	const struct sched_class	*sched_class;
+ 	struct sched_entity		se;
++	struct sched_mlq_entity		mlq;
+ 	struct sched_rt_entity		rt;
+ 	struct sched_dl_entity		dl;
+ 
+diff --git a/include/uapi/linux/sched.h b/include/uapi/linux/sched.h
+index 3bac0a8ceab2..3e51a03b5e2d 100644
+--- a/include/uapi/linux/sched.h
++++ b/include/uapi/linux/sched.h
+@@ -118,6 +118,7 @@ struct clone_args {
+ /* SCHED_ISO: reserved but not implemented yet */
+ #define SCHED_IDLE		5
+ #define SCHED_DEADLINE		6
++#define SCHED_MLQ		7
+ 
+ /* Can be ORed in to make sure the process is reverted back to SCHED_NORMAL on fork */
+ #define SCHED_RESET_ON_FORK     0x40000000
+diff --git a/kernel/sched/Makefile b/kernel/sched/Makefile
+index 978fcfca5871..d1705c835c12 100644
+--- a/kernel/sched/Makefile
++++ b/kernel/sched/Makefile
+@@ -23,7 +23,7 @@ CFLAGS_core.o := $(PROFILING) -fno-omit-frame-pointer
+ endif
+ 
+ obj-y += core.o loadavg.o clock.o cputime.o
+-obj-y += idle.o fair.o rt.o deadline.o
++obj-y += idle.o fair.o rt.o deadline.o mlq.o
+ obj-y += wait.o wait_bit.o swait.o completion.o
+ 
+ obj-$(CONFIG_SMP) += cpupri.o cpudeadline.o topology.o stop_task.o pelt.o
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index f21714ea3db8..efda7fdbb799 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -2018,6 +2018,8 @@ static inline int __normal_prio(int policy, int rt_prio, int nice)
+ 		prio = MAX_DL_PRIO - 1;
+ 	else if (rt_policy(policy))
+ 		prio = MAX_RT_PRIO - 1 - rt_prio;
++	else if (mlq_policy(policy))
++		prio = rt_prio;
+ 	else
+ 		prio = NICE_TO_PRIO(nice);
+ 
+@@ -4366,7 +4368,9 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 		p->sched_reset_on_fork = 0;
+ 	}
+ 
+-	if (dl_prio(p->prio))
++	if (p->policy == SCHED_MLQ)
++		p->sched_class = &mlq_sched_class;
++	else if (dl_prio(p->prio))
+ 		return -EAGAIN;
+ 	else if (rt_prio(p->prio))
+ 		p->sched_class = &rt_sched_class;
+@@ -6702,7 +6706,9 @@ EXPORT_SYMBOL(default_wake_function);
+ 
+ static void __setscheduler_prio(struct task_struct *p, int prio)
+ {
+-	if (dl_prio(prio))
++	if (p->policy == SCHED_MLQ)
++		p->sched_class = &mlq_sched_class;
++	else if (dl_prio(prio))
+ 		p->sched_class = &dl_sched_class;
+ 	else if (rt_prio(prio))
+ 		p->sched_class = &rt_sched_class;
+@@ -7246,9 +7252,10 @@ static int __sched_setscheduler(struct task_struct *p,
+ 	if (attr->sched_priority > MAX_RT_PRIO-1)
+ 		return -EINVAL;
+ 	if ((dl_policy(policy) && !__checkparam_dl(attr)) ||
+-	    (rt_policy(policy) != (attr->sched_priority != 0)))
++	    ((rt_policy(policy) || mlq_policy(policy)) != (attr->sched_priority != 0)))
++		return -EINVAL;
++	if (mlq_policy(policy) && (attr->sched_priority < 1 || attr->sched_priority > 3))
+ 		return -EINVAL;
+-
+ 	/*
+ 	 * Allow unprivileged RT tasks to decrease priority:
+ 	 */
+@@ -7344,6 +7351,8 @@ static int __sched_setscheduler(struct task_struct *p,
+ 	if (unlikely(policy == p->policy)) {
+ 		if (fair_policy(policy) && attr->sched_nice != task_nice(p))
+ 			goto change;
++		if (mlq_policy(policy) && attr->sched_priority != p->rt_priority)
++			goto change;
+ 		if (rt_policy(policy) && attr->sched_priority != p->rt_priority)
+ 			goto change;
+ 		if (dl_policy(policy) && dl_param_changed(p, attr))
+@@ -7665,7 +7674,7 @@ static void get_params(struct task_struct *p, struct sched_attr *attr)
+ {
+ 	if (task_has_dl_policy(p))
+ 		__getparam_dl(p, attr);
+-	else if (task_has_rt_policy(p))
++	else if (task_has_rt_policy(p) || task_has_mlq_policy(p))
+ 		attr->sched_priority = p->rt_priority;
+ 	else
+ 		attr->sched_nice = task_nice(p);
+@@ -7796,7 +7805,7 @@ SYSCALL_DEFINE2(sched_getparam, pid_t, pid, struct sched_param __user *, param)
+ 	if (retval)
+ 		goto out_unlock;
+ 
+-	if (task_has_rt_policy(p))
++	if (task_has_rt_policy(p) || task_has_mlq_policy(p))
+ 		lp.sched_priority = p->rt_priority;
+ 	rcu_read_unlock();
+ 
+@@ -8408,6 +8417,9 @@ SYSCALL_DEFINE1(sched_get_priority_max, int, policy)
+ 	case SCHED_RR:
+ 		ret = MAX_RT_PRIO-1;
+ 		break;
++	case SCHED_MLQ:
++		ret = 3;
++		break;
+ 	case SCHED_DEADLINE:
+ 	case SCHED_NORMAL:
+ 	case SCHED_BATCH:
+@@ -8435,6 +8447,9 @@ SYSCALL_DEFINE1(sched_get_priority_min, int, policy)
+ 	case SCHED_RR:
+ 		ret = 1;
+ 		break;
++	case SCHED_MLQ:
++		ret = 1;
++		break;
+ 	case SCHED_DEADLINE:
+ 	case SCHED_NORMAL:
+ 	case SCHED_BATCH:
+@@ -9288,7 +9303,8 @@ void __init sched_init(void)
+ 
+ 	/* Make sure the linker didn't screw up */
+ 	BUG_ON(&idle_sched_class + 1 != &fair_sched_class ||
+-	       &fair_sched_class + 1 != &rt_sched_class ||
++	       &fair_sched_class + 1 != &mlq_sched_class ||
++		   &mlq_sched_class + 1  != &rt_sched_class ||
+ 	       &rt_sched_class + 1   != &dl_sched_class);
+ #ifdef CONFIG_SMP
+ 	BUG_ON(&dl_sched_class + 1 != &stop_sched_class);
+@@ -9363,6 +9379,7 @@ void __init sched_init(void)
+ 		rq->calc_load_active = 0;
+ 		rq->calc_load_update = jiffies + LOAD_FREQ;
+ 		init_cfs_rq(&rq->cfs);
++		init_mlq_rq(&rq->mlq);
+ 		init_rt_rq(&rq->rt);
+ 		init_dl_rq(&rq->dl);
+ #ifdef CONFIG_FAIR_GROUP_SCHED
+diff --git a/kernel/sched/mlq.c b/kernel/sched/mlq.c
+new file mode 100644
+index 000000000000..fb355610ebf2
+--- /dev/null
++++ b/kernel/sched/mlq.c
+@@ -0,0 +1,381 @@
++// SPDX-License-Identifier: GPL-2.0
++#include <linux/kernel.h>
++#include "sched.h"
++
++#define MLQ_TIMESLICE_1_NS (50 * 1000000)
++#define MLQ_TIMESLICE_2_NS (100 * 1000000)
++
++#define MLQ_RUNTIME_NS 950000000
++#define MLQ_SLEEP_NS 50000000
++
++#define PRIO_TO_QUEUE(prio) ((prio)-1)
++
++#define pr_mlq(fmt, ...) printk(KERN_DEFAULT "MLQ: " fmt, ##__VA_ARGS__)
++
++static bool enable_throttling;
++
++static int __init mlq_throttling(char *str)
++{
++	enable_throttling = 1;
++	return 0;
++}
++
++early_param("mlq_throttling", mlq_throttling);
++
++static enum hrtimer_restart timer_callback(struct hrtimer *timer)
++{
++	struct rq *rq = container_of(timer, struct rq, mlq.throttle_timer);
++	struct mlq_rq *mlq_rq = &rq->mlq;
++
++	/* Ends throttling */
++	raw_spin_rq_lock(rq);
++	update_rq_clock(rq);
++	mlq_rq->is_throttled = false;
++	mlq_rq->exec_time = 0;
++	mlq_rq->sleep_time = 0;
++	mlq_rq->last_check_time = rq_clock_task(rq);
++	add_nr_running(rq, mlq_rq->nr_running);
++	resched_curr(rq);
++	raw_spin_rq_unlock(rq);
++
++	return HRTIMER_NORESTART;
++}
++
++static void check_and_start_throttling(struct rq *rq)
++{
++	s64 exptime = MLQ_SLEEP_NS - rq->mlq.sleep_time;
++
++	if (exptime < 0) {
++		/* Do not need throttling */
++		rq->mlq.exec_time = 0;
++		rq->mlq.sleep_time = 0;
++		return;
++	}
++
++	if (rq->mlq.is_throttled) {
++		/* Already throttled */
++		return;
++	}
++
++	pr_mlq("throttling for %llu ns\n", exptime);
++
++	hrtimer_start(&rq->mlq.throttle_timer, ns_to_ktime(exptime),
++		      HRTIMER_MODE_REL_HARD | HRTIMER_MODE_PINNED);
++	rq->mlq.is_throttled = true;
++	sub_nr_running(rq, rq->mlq.nr_running);
++	resched_curr(rq);
++}
++
++static void enqueue_task_mlq(struct rq *rq, struct task_struct *p, int flags)
++{
++	struct mlq_rq *mlq_rq = &rq->mlq;
++	int queue_idx = PRIO_TO_QUEUE(p->prio);
++
++	pr_mlq("enqueued task %d to queue %d\n", p->pid, queue_idx);
++	// // printk(__func__);
++	p->mlq.time_slice = PRIO_TO_QUEUE(p->prio) == 0 ? MLQ_TIMESLICE_1_NS :
++							  MLQ_TIMESLICE_2_NS;
++	list_add_tail(&p->mlq.run_list, &rq->mlq.queue[queue_idx]);
++	mlq_rq->nr_running++;
++	if (!rq->mlq.is_throttled)
++		add_nr_running(rq, 1);
++}
++
++static void dequeue_task_mlq(struct rq *rq, struct task_struct *p, int flags)
++{
++	struct mlq_rq *mlq_rq = &rq->mlq;
++
++	pr_mlq("dequeued task %d\n", p->pid);
++	// // printk(__func__);
++	list_del_init(&p->mlq.run_list);
++	mlq_rq->nr_running--;
++	if (!rq->mlq.is_throttled)
++		sub_nr_running(rq, 1);
++}
++
++static void requeue_task_mlq(struct rq *rq, struct task_struct *p)
++{
++	// // printk(__func__);
++	int queue_id = PRIO_TO_QUEUE(p->prio);
++
++	pr_mlq("requeued task %d to queue %d\n", p->pid, queue_id);
++	list_del_init(&p->mlq.run_list);
++	list_add_tail(&p->mlq.run_list, &rq->mlq.queue[PRIO_TO_QUEUE(p->prio)]);
++	p->mlq.time_slice = PRIO_TO_QUEUE(p->prio) == 0 ? MLQ_TIMESLICE_1_NS :
++							  MLQ_TIMESLICE_2_NS;
++
++}
++
++static void yield_task_mlq(struct rq *rq)
++{
++	// // printk(__func__);
++	requeue_task_mlq(rq, rq->curr);
++}
++
++static void check_preempt_curr_mlq(struct rq *rq, struct task_struct *p,
++				   int flags)
++{
++	// // printk(__func__);
++	if (p->prio < rq->curr->prio)
++		resched_curr(rq);
++}
++
++static struct task_struct *pick_task_mlq(struct rq *rq)
++{
++	struct task_struct *p;
++	struct sched_mlq_entity *se;
++	struct mlq_rq *mlq_rq = &rq->mlq;
++	int i;
++
++	if (rq->mlq.is_throttled)
++		return NULL;
++
++	for (i = 0; i < 3; i++) {
++		if (list_empty(&mlq_rq->queue[i]))
++			continue;
++
++		se = list_first_entry(&mlq_rq->queue[i],
++				      struct sched_mlq_entity, run_list);
++		p = container_of(se, struct task_struct, mlq);
++		pr_mlq("picked task %d from queue %d\n", p->pid, i);
++		return p;
++	}
++
++	// pr_mlq("No task to pick\n");
++	return NULL;
++}
++
++static void update_time_slice(struct task_struct *p)
++{
++	struct rq *rq = task_rq(p);
++	u64 now = rq_clock_task(rq);
++
++	p->mlq.time_slice -= rq_clock_task(rq) - p->mlq.exec_start;
++	p->mlq.exec_start = now;
++}
++
++static void update_curr_mlq(struct rq *rq)
++{
++	u64 delta_exec, now;
++	struct task_struct *curr = rq->curr;
++
++	if (curr->sched_class != &mlq_sched_class)
++		return;
++
++	update_time_slice(curr);
++
++	now = rq_clock_task(rq);
++	delta_exec = now - curr->se.exec_start;
++
++	schedstat_set(curr->se.statistics.exec_max,
++		      max(curr->se.statistics.exec_max, delta_exec));
++
++	curr->se.sum_exec_runtime += delta_exec;
++	account_group_exec_runtime(curr, delta_exec);
++
++	curr->se.exec_start = now;
++	cgroup_account_cputime(curr, delta_exec);
++
++	if (!rq->mlq.throttling_enabled)
++		return;
++
++	delta_exec = now - rq->mlq.last_check_time;
++	rq->mlq.exec_time += delta_exec;
++	rq->mlq.last_check_time = now;
++
++	if (rq->mlq.exec_time >= MLQ_RUNTIME_NS)
++		check_and_start_throttling(rq);
++}
++
++static void put_prev_task_mlq(struct rq *rq, struct task_struct *p)
++{
++	update_curr_mlq(rq);
++	rq->mlq.curr = NULL;
++}
++
++static inline void set_next_task_mlq(struct rq *rq, struct task_struct *p,
++				     bool first)
++{
++	u64 delta_exec, now;
++
++	rq->mlq.curr = p;
++	p->se.exec_start = rq_clock_task(rq);
++	p->mlq.exec_start = rq_clock_task(rq);
++
++	if (!rq->mlq.throttling_enabled)
++		return;
++
++	now = rq_clock_task(rq);
++	delta_exec = now - rq->mlq.last_check_time;
++	rq->mlq.sleep_time += delta_exec;
++	rq->mlq.last_check_time = now;
++
++	if (rq->mlq.sleep_time >= MLQ_SLEEP_NS) {
++		rq->mlq.sleep_time = 0;
++		rq->mlq.exec_time = 0;
++	}
++}
++
++static struct task_struct *pick_next_task_mlq(struct rq *rq)
++{
++	struct task_struct *p;
++
++	if (rq->mlq.curr)
++		put_prev_task_mlq(rq, rq->curr);
++	p = pick_task_mlq(rq);
++	if (p)
++		set_next_task_mlq(rq, p, false);
++	else if (current->sched_class == &mlq_sched_class)
++		pr_mlq("switched from MLQ\n");
++
++	return p;
++}
++
++static int balance_mlq(struct rq *rq, struct task_struct *prev,
++		       struct rq_flags *rf)
++{
++	return 0;
++}
++
++static int select_task_rq_mlq(struct task_struct *p, int task_cpu, int flags)
++{
++	struct rq *rq;
++	int cpus, best_cpu, min_nr_running;
++	cpumask_t cpumask = p->cpus_mask;
++
++	// printk(__func__);
++
++	if (!(flags & (WF_TTWU | WF_FORK)))
++		return task_cpu;
++
++	rcu_read_lock();
++	min_nr_running = -1;
++	for_each_cpu(cpus, &cpumask) {
++		rq = cpu_rq(cpus);
++		if (((min_nr_running == -1) ||
++		     (min_nr_running > rq->nr_running)) &&
++		    cpu_online(cpus)) {
++			min_nr_running = rq->nr_running;
++			best_cpu = cpus;
++		}
++	}
++	rcu_read_unlock();
++
++	if (min_nr_running == -1)
++		return task_cpu;
++
++	return best_cpu;
++}
++
++static void migrate_task_rq_mlq(struct task_struct *p, int new_cpu)
++{
++	// printk(__func__);
++}
++
++static void task_woken_mlq(struct rq *this_rq, struct task_struct *task)
++{
++	// printk(__func__);
++}
++
++static void rq_online_mlq(struct rq *rq)
++{
++	// printk(__func__);
++}
++
++static void rq_offline_mlq(struct rq *rq)
++{
++	// printk(__func__);
++}
++
++static void task_tick_mlq(struct rq *rq, struct task_struct *p, int queued)
++{
++	update_curr_mlq(rq);
++
++	if (PRIO_TO_QUEUE(p->prio) == 2)
++		return;
++
++	if (p->mlq.time_slice <= 0) {
++		pr_mlq("time slice expired for task %d\n", p->pid);
++		requeue_task_mlq(rq, p);
++		resched_curr(rq);
++	}
++}
++
++static void switched_from_mlq(struct rq *this_rq, struct task_struct *p)
++{
++	pr_mlq("task %d switched from MLQ\n", p->pid);
++}
++
++static void switched_to_mlq(struct rq *rq, struct task_struct *p)
++{
++	p->mlq.time_slice = 0;
++	pr_mlq("task %d switched to MLQ with priority %d\n", p->pid,
++	       p->prio);
++	if (task_on_rq_queued(p))
++		resched_curr(rq);
++}
++
++static void prio_changed_mlq(struct rq *rq, struct task_struct *p, int oldprio)
++{
++	pr_mlq("changed priority to %d for task %d\n", p->prio, p->pid);
++	if (task_on_rq_queued(p))
++		resched_curr(rq);
++}
++
++void init_mlq_rq(struct mlq_rq *mlq_rq)
++{
++	int i;
++
++	for (i = 0; i < 3; i++)
++		INIT_LIST_HEAD(&mlq_rq->queue[i]);
++	mlq_rq->nr_running = 0;
++
++	hrtimer_init(&mlq_rq->throttle_timer, CLOCK_MONOTONIC,
++		     HRTIMER_MODE_REL);
++	mlq_rq->throttle_timer.function = timer_callback;
++
++	mlq_rq->exec_time = 0;
++	mlq_rq->sleep_time = 0;
++	mlq_rq->last_check_time = 0;
++	mlq_rq->is_throttled = false;
++	mlq_rq->throttling_enabled = enable_throttling;
++}
++
++DEFINE_SCHED_CLASS(mlq) = {
++
++	.enqueue_task = enqueue_task_mlq,
++	.dequeue_task = dequeue_task_mlq,
++	.yield_task = yield_task_mlq,
++
++	.check_preempt_curr = check_preempt_curr_mlq,
++
++	.pick_next_task = pick_next_task_mlq,
++	.put_prev_task = put_prev_task_mlq,
++	.set_next_task = set_next_task_mlq,
++
++#ifdef CONFIG_SMP
++	.balance = balance_mlq,
++	.select_task_rq = select_task_rq_mlq,
++	.pick_task = pick_task_mlq,
++	.migrate_task_rq = migrate_task_rq_mlq,
++	.task_woken = task_woken_mlq,
++	.set_cpus_allowed = set_cpus_allowed_common,
++
++	.rq_online = rq_online_mlq,
++	.rq_offline = rq_offline_mlq,
++
++	.find_lock_rq = NULL,
++#endif
++
++	.task_tick = task_tick_mlq,
++	/*
++	 * The switched_from() call is allowed to drop rq->lock, therefore we
++	 * cannot assume the switched_from/switched_to pair is serialized by
++	 * rq->lock. They are however serialized by p->pi_lock.
++	 */
++	.switched_from = switched_from_mlq,
++	.switched_to = switched_to_mlq,
++
++	.prio_changed = prio_changed_mlq,
++	.update_curr = update_curr_mlq,
++};
+diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
+index 3d3e5793e117..44ad882b8645 100644
+--- a/kernel/sched/sched.h
++++ b/kernel/sched/sched.h
+@@ -168,6 +168,11 @@ static inline int fair_policy(int policy)
+ 	return policy == SCHED_NORMAL || policy == SCHED_BATCH;
+ }
+ 
++static inline int mlq_policy(int policy)
++{
++	return policy == SCHED_MLQ;
++}
++
+ static inline int rt_policy(int policy)
+ {
+ 	return policy == SCHED_FIFO || policy == SCHED_RR;
+@@ -180,7 +185,7 @@ static inline int dl_policy(int policy)
+ static inline bool valid_policy(int policy)
+ {
+ 	return idle_policy(policy) || fair_policy(policy) ||
+-		rt_policy(policy) || dl_policy(policy);
++		rt_policy(policy) || dl_policy(policy) || mlq_policy(policy);
+ }
+ 
+ static inline int task_has_idle_policy(struct task_struct *p)
+@@ -188,6 +193,11 @@ static inline int task_has_idle_policy(struct task_struct *p)
+ 	return idle_policy(p->policy);
+ }
+ 
++static inline int task_has_mlq_policy(struct task_struct *p)
++{
++	return mlq_policy(p->policy);
++}
++
+ static inline int task_has_rt_policy(struct task_struct *p)
+ {
+ 	return rt_policy(p->policy);
+@@ -633,6 +643,20 @@ static inline int rt_bandwidth_enabled(void)
+ # define HAVE_RT_PUSH_IPI
+ #endif
+ 
++struct mlq_rq {
++	struct list_head	queue[3];
++	struct task_struct	*curr;
++	unsigned int		nr_running;
++
++	/* Following are used for throttling */
++	struct hrtimer		throttle_timer;
++	s64			exec_time;
++	s64			sleep_time;
++	s64			last_check_time;
++	bool			is_throttled;
++	bool			throttling_enabled;
++};
++
+ /* Real-Time classes' related field in a runqueue: */
+ struct rt_rq {
+ 	struct rt_prio_array	active;
+@@ -956,6 +980,7 @@ struct rq {
+ #endif
+ 
+ 	struct cfs_rq		cfs;
++	struct mlq_rq		mlq;
+ 	struct rt_rq		rt;
+ 	struct dl_rq		dl;
+ 
+@@ -2215,6 +2240,7 @@ extern struct sched_class __end_sched_classes[];
+ extern const struct sched_class stop_sched_class;
+ extern const struct sched_class dl_sched_class;
+ extern const struct sched_class rt_sched_class;
++extern const struct sched_class mlq_sched_class;
+ extern const struct sched_class fair_sched_class;
+ extern const struct sched_class idle_sched_class;
+ 
+@@ -2233,6 +2259,11 @@ static inline bool sched_rt_runnable(struct rq *rq)
+ 	return rq->rt.rt_queued > 0;
+ }
+ 
++static inline bool sched_mlq_runnable(struct rq *rq)
++{
++	return rq->mlq.nr_running > 0;
++}
++
+ static inline bool sched_fair_runnable(struct rq *rq)
+ {
+ 	return rq->cfs.nr_running > 0;
+@@ -2699,6 +2730,7 @@ static inline void resched_latency_warn(int cpu, u64 latency) {}
+ #endif /* CONFIG_SCHED_DEBUG */
+ 
+ extern void init_cfs_rq(struct cfs_rq *cfs_rq);
++extern void init_mlq_rq(struct mlq_rq *mlq_rq);
+ extern void init_rt_rq(struct rt_rq *rt_rq);
+ extern void init_dl_rq(struct dl_rq *dl_rq);
+ 
