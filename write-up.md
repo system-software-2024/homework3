@@ -410,8 +410,14 @@ Pid 3093 can be run as soon as pid 3092 sleeps, which is what we expect.
 * Run two busy loop tasks with priority 1 and priority 2. After a period of time, exchange their priority.
 * ![img](imgs/experiment4_1.png)
 * Observe the task in queue with priority 1 is changed or not.
+
+(before change)
 * ![img](imgs/experiment4_2.png)
+
+(after change)
 * ![img](imgs/experiment4_3.png)
+
+Originally, task 637 was at the queue 0 (priority 1). After we exchanged the priorities of task 637 and 638, the task 638 is at the queue 0 (priority 1) and is being picked.
 
 ### Experiment-5 - throttling test (bonus)
 
