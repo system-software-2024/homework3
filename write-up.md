@@ -8,7 +8,7 @@ Kernel Configuration
 
 We change the preemption model to **Voluntary Kernel Preemption (Desktop)**. This avoids problems related to RCU stalls since **Preemptible Kernel** will also select `CONFIG_PREEMPT_RCU` which will cause problems if real-time tasks do not give up their CPUs.
 
-![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_11b4157742cf7cf732337c4cbdeefb27.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264784&Signature=0HjeSLnmzUme2kV6Ivw%2BXylcgBw%3D)
+![img](kconfig.png)
 
 
 Implementation Details
@@ -211,13 +211,13 @@ In this section, we will discuss about how to test the system calls mentioned in
 
 * sched_setscheduler sets the scheduling policy of specified process to MLQ scheduler, and assign a priority to the process. 
 * sched_getscheduler gets the process's scheduling policy, we expect that the system will return 7 (SCHED_MLQ).
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_70f4fc484f9ed793a648e3c99eca41e9.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264878&Signature=oYEN9RX9JIesPNY3yrtxhAYxpPE%3D)
+* ![img](sys_scheduler.png)
 
 ### sched_setparam / sched_getparam
 
 * sched_setparam sets the scheduling priority of specified process, the pre-defined range of priority of MLQ scheduler is between 1 and 3. If the number is not in the range, it will return an error. 
 * sched_getparam gets the scheduling priority of specified process, the priority we got should be the same as what we set.
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_6229b62ce425913b5836a384112f8d36.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264891&Signature=uuZwY%2BQnZXTwxFG2aPhZD6TrGjA%3D)
+* ![img](sys_param.png)
 
 ### sched_getpriority_min / sched_getpriority_max
 
@@ -225,7 +225,7 @@ In this section, we will discuss about how to test the system calls mentioned in
 
 * To achieve the requirement, we modified the definition of these two system calls.
 
-* ![image](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_1599d4699c28e6f0d247df59d1b7f63a.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264907&Signature=k8BgxWeW2D47yTJFc1%2BNbid6O4k%3D)
+* ![image](sys_priority.png)
 
   ```c=
   SYSCALL_DEFINE1(sched_get_priority_min, int, policy)
@@ -277,7 +277,7 @@ In this section, we will discuss about how to test the system calls mentioned in
 * sched_getaffinity gets the CPU affinity for specific process by iterating through all available cpuids. It is able to get all online cpuids from `long nproc = sysconf(_SC_NPROCESSORS_ONLN)`, then we can check whether CPU affinity is set by `CPU_ISSET` macro.
 * The critical functions in linux kernel which are directly associated with this system call are`set_cpus_allowed_common` and `select_task_rq_mlq`, which is defined in `kernel/sched/core.c` and `kernel/sched/mlq.c`
 * There are 2 cores in the qemu virtual machine, so we basically set the cpuid to 0 and 1, the `sched_getaffinity` should return the corresponding cpuid.
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_c5930b3ccab483450d14692b97f35368.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713265951&Signature=TW6QY6VjJaEcd1jtM%2FB6KoMENfo%3D)
+* ![img](sys_affinity.png)
 
 
 Trace-printk
@@ -349,7 +349,7 @@ When MLQ is being throttled, an message `MLQ: Throttling for xxx ns` will be out
 
 When running an infinite loop without any sleeps with MLQ, you will see the message in the kernel ring buffer.
 
-![image](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_cc54b3f5353c64462a9ee94c5762290e.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264947&Signature=8keMOVlj5hCc5mG5DjO4Qlp2P44%3D))
+![image](bonus_throttling.png)
 
 ## Experiments
 
@@ -363,7 +363,7 @@ These are experiments to check whether MLQ works correctly. Syscall tests are te
 * Processes `loop_busy(pid=3093)` and `loop_busy(pid=3094)` with prioritiy 2 and 3, respectively.
 
 
-![image](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_41828e96335bc856096a45530f6bd69a.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264975&Signature=VF3FaW10FgPokowbuxt8uSTnM28%3D)
+![image](experiment1.png)
 
 ### Experiment-2 - round-robin test
 
@@ -385,18 +385,18 @@ These are experiments to check whether MLQ works correctly. Syscall tests are te
 ### Experiment-3 - FIFO (Priority 3) tests
 
 * Run a FIFO test with a busy loop, check if it works properly.
-* ![iamge](![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_fe43e41e22ad0253d55a351813fc42b5.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264984&Signature=EPPhiG0BqG6jdRoYNf%2FrvwyedEQ%3D)
+* ![img](experiment3_1.png)
 * The task will execute permanently.
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_a3a6bc51949256ba755345e6615cbacb.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713264992&Signature=HnCxfDLWvM2tdVcGkfPkj%2BENLns%3D)
+* ![img](experiment3_2.png)
 
 
 ### Experiment-4 - Priority changing tests
 
 * Run two busy loop tasks with priority 1 and priority 2. After a period of time, exchange their priority.
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_227d7d09e4bcc655593e4083ee72ec38.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713265306&Signature=tIDDqa1HI1zrInuZaUnSSCeSv5k%3D)
+* ![img](experiment4_1.png)
 * Observe the task in queue with priority 1 is changed or not.
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_314dc19e09c6ce8481325bc541c7b8bd.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713265312&Signature=n0MX%2FZzjNB91aVUf%2BR%2B2p8SdQQs%3D)
-* ![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_74de9b4ea2bb5bc91695da9f7ca9b80d.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713265317&Signature=2c6OW%2BXbhtR0G2KkK%2Fp7neAW1R8%3D)
+* ![img](experiment4_2.png)
+* ![img](experiment4_3.png)
 
 ### Experiment-5 - throttling test (bonus)
 
@@ -426,7 +426,7 @@ $ dmesg       # check the kernel message
 
 Result: The system is laggy but not blocked. `dmesg` shows the following message.
 
-![img](https://hackmd-prod-images.s3-ap-northeast-1.amazonaws.com/uploads/upload_ebce42e5b9960537af682d6842fe2ff5.png?AWSAccessKeyId=AKIA3XSAAW6AWSKNINWO&Expires=1713265404&Signature=VbyLBLUK8VM7ZuXhgFTwX7jZ1jM%3D)
+![img](experiment5_1.png)
 
 It shows that throttling works.
 
